@@ -37,6 +37,23 @@ class Translator:
         text = re.sub(r"(<br>|<BR>)", r"\\n", text) # restore newline
         return text
 
+    @staticmethod
+    def split_batch(batch: dict) -> tuple[dict]:
+        batch_keep = {}
+        batch_translate = {}
+
+        for key, value in batch.items():
+            if not isinstance(value, str): # non-string values
+                batch_keep[key] = value
+            elif value.startswith("[") and value.endswith("]"): # []
+                batch_keep[key] = value
+            elif value.startswith("{") and value.endswith("}"): # {}
+                batch_keep[key] = value
+            else:
+                batch_translate[key] = value
+
+        return batch_keep, batch_translate
+
     def make_batches(self, lang_dict: dict, max_tokens: int) -> list:
         batches = []
         current_batch = {}
@@ -61,8 +78,8 @@ class Translator:
 
         return batches
     
-    async def translate(self, source_lang_dict: dict, target_lang_dict: dict, target_lang: str, status):
-        semaphore = asyncio.Semaphore(4) # limit concurrent translations
+    async def translate(self, source_dict: dict, target_dict: dict, target_lang: str, status):
+        semaphore = asyncio.Semaphore(4) # concurrency limit
         progress_bar = status.progress(0, "Translating...")
         
         async def wrap_translate(idx, total, batch):
@@ -77,15 +94,16 @@ class Translator:
                     self.logger.error("Failed to translate batch (%d/%d)", idx, total, exc_info=True)
                     return {} # return empty dict on failure
 
-        source_lang_dict_flatten = flatten(source_lang_dict, separator="|") # Flatten json
-        batches = self.make_batches(source_lang_dict_flatten, max_tokens=6000) # 6000 tokens max
-        
+        source_dict_flatten = flatten(source_dict, separator="|") # Flatten json
+        batches = self.make_batches(source_dict_flatten, max_tokens=6000) # 6000 tokens max
+
         tasks = [wrap_translate(idx, len(batches), batch) for idx, batch in enumerate(batches, start=1)]
         batches_out = await asyncio.gather(*tasks)
         
         progress_bar.empty()
         self.logger.info("Translated %d batches", len(batches_out))
 
+        # gather results
         result = {}
         for out in batches_out:
             result.update(out)
@@ -93,15 +111,15 @@ class Translator:
         self.logger.info("Gathered translated results")
 
         error_log = []
-        for key in source_lang_dict.keys():
+        for key in source_dict.keys():
             if result.get(key) is None: # Missing key
                 error_log.append(f"Missing translation: {key}")
                 continue
-            if isinstance(source_lang_dict[key], list): # Invalid list length
-                if not isinstance(result[key], list) or len(source_lang_dict[key]) != len(result[key]):
+            if isinstance(source_dict[key], list): # Invalid list length
+                if not isinstance(result[key], list) or len(source_dict[key]) != len(result[key]):
                     error_log.append(f"Invalid translation: {key}")
                     continue
-            target_lang_dict[key] = result[key] # Update target_lang_dict only for valid keys
+            target_dict[key] = result[key] # Update target_lang_dict only for valid keys
         self.logger.info("Updated target language dictionary")
         
         if error_log:
@@ -119,26 +137,14 @@ class GoogleTranslator(Translator):
     
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
     async def _translate(self, batch: dict, target_lang: str) -> dict:
-        batch_input_keys = [] # keys to translate
-        batch_input_values = [] # values to translate
-        batch_original = {} # formatted text - do not translate
-        batch_translated = {} # translated text
+        batch_keep, batch_translate = self.split_batch(batch) # split dict
+        batch_input = [self._escape(value) for value in batch_translate.values()] # values to translate
+        batch_output = {}
 
-        for key, value in batch.items():
-            if not isinstance(value, str):
-                batch_original[key] = value
-            elif value.startswith("[") and value.endswith("]"):
-                batch_original[key] = value
-            elif value.startswith("{") and value.endswith("}"):
-                batch_original[key] = value
-            else:
-                batch_input_keys.append(key)
-                batch_input_values.append(self._escape(value))
-
-        if batch_input_values:
-            batch_output = await self.translator.translate(batch_input_values, dest=MINECRAFT_TO_GOOGLE[target_lang])
-            batch_translated = {key: self._unescape(value.text) for key, value in zip(batch_input_keys, batch_output)}
-        return {**batch_original, **batch_translated}
+        if batch_input:
+            batch_output = await self.translator.translate(batch_input, dest=MINECRAFT_TO_GOOGLE[target_lang])
+            batch_output = {key: self._unescape(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
+        return batch_keep | batch_output
 
 class DeepLTranslator(Translator):
     def __init__(self, auth_key: str):
@@ -147,32 +153,20 @@ class DeepLTranslator(Translator):
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
     async def _translate(self, batch: dict, target_lang: str) -> dict:
-        batch_input_keys = []
-        batch_input_values = []
-        batch_original = {}
-        batch_translated = {}
-        
-        for key, value in batch.items():
-            if not isinstance(value, str):
-                batch_original[key] = value
-            elif value.startswith("[") and value.endswith("]"):
-                batch_original[key] = value
-            elif value.startswith("{") and value.endswith("}"):
-                batch_original[key] = value
-            else:
-                batch_input_keys.append(key)
-                batch_input_values.append(self._escape(value))
+        batch_keep, batch_translate = self.split_batch(batch)
+        batch_input = [self._escape(value) for value in batch_translate.values()] # values to translate
+        batch_output = {}
 
-        if batch_input_values:
+        if batch_input:
             batch_output = await asyncio.to_thread(
                 self.translator.translate_text,
-                text=batch_input_values,
+                text=batch_input,
                 target_lang=MINECRAFT_TO_DEEPL[target_lang],
                 context="This is a Minecraft quest text, so please keep the color codes and formatting intact. Example of color codes: <a>, <b>, <1>, <2>, <l>, <r>. Example of formatting: <br>. Example Translation: <a>Hello <br><b>Minecraft! -> <a>안녕하세요 <br><b>마인크래프트!",
                 preserve_formatting=True
             )
-            batch_translated = {key: self._unescape(value.text) for key, value in zip(batch_input_keys, batch_output)}
-        return {**batch_original, **batch_translated}
+            batch_output = {key: self._unescape(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
+        return batch_keep | batch_output
 
 class GeminiTranslator(Translator):
     def __init__(self, auth_key: str):
