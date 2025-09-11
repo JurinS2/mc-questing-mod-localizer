@@ -6,7 +6,7 @@ import streamlit as st
 
 from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
 from src.converter import BQMQuestConverter, LANGConverter
-from src.translator import GoogleTranslator, DeepLTranslator, GeminiTranslator
+from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
 from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
 
 Message("bqm_title").title()
@@ -182,11 +182,12 @@ if button:
             
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()
+            manager = TranslationManager(translator)
             if source_lang_dict:
                 task_key = f"task-{generate_task_key(time.time())}"
                 schedule_task(
                     task_key,
-                    translator(source_lang_dict, target_lang_dict, target_lang, status)
+                    manager(source_lang_dict, target_lang_dict, target_lang, status)
                 )
                 process_tasks()
     except Exception as e:

@@ -17,8 +17,6 @@ class QuestConverter():
         self.modpack_name = modpack_name
         self.quest_arr = [self._read(quest) for quest in quest_arr]
         self.lang_dict = {}
-        
-        self.logger.info("Initialized")
 
     @staticmethod
     @abstractmethod

@@ -1,8 +1,12 @@
+from __future__ import annotations
+
 import re
 import json
 import asyncio
 import logging
-from abc import abstractmethod
+from abc import ABC, abstractmethod
+
+from streamlit.delta_generator import DeltaGenerator
 from flatten_json import flatten, unflatten_list
 from tenacity import retry, stop_after_attempt, wait_exponential
 from json_repair import repair_json
@@ -20,71 +24,111 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from src.utils import get_session_id
 from src.constants import MINECRAFT_TO_DEEPL, MINECRAFT_TO_GOOGLE
 
-class Translator:
-    def __init__(self):        
+def escape_text(text: str) -> str:
+    '''Escape special characters to prevent translation API from altering them.'''
+    text = re.sub(r"(\\n)", r"<br>", text) # escape newline
+    text = re.sub(r"(&[0-9a-z])", lambda x: f"<{x.group(0)[1:]}>", text) # escape color code
+    return text
+
+def unescape_text(text: str) -> str:
+    '''Unescape special characters to restore original format.'''
+    text = re.sub(r"(<[0-9a-zA-Z]>)", lambda x: f"&{x.group(0)[1:-1].lower()}", text) # restore color code
+    text = re.sub(r"&(?=[^0-9a-z]|$)", r"\&", text) # escape single &
+    text = re.sub(r"(<br>|<BR>)", r"\\n", text) # restore newline
+    return text
+
+def make_batches(lang_dict: dict, max_tokens: int) -> list[dict]:
+    '''Create batches of key-value pairs from a dictionary without exceeding max token limit.'''
+    logger = logging.getLogger(f"make_batches ({get_session_id()})")
+    
+    batches = []
+    current_batch = {}
+    current_tokens = 0
+    enc = tiktoken.encoding_for_model("gpt-4")
+
+    for key, value in lang_dict.items():
+        pair_str = json.dumps({key: value}, ensure_ascii=False)
+        tokens = len(enc.encode(pair_str)) # count tokens
+        if current_tokens + tokens > max_tokens and current_batch:
+            batches.append(current_batch) # append current batch
+            current_batch = {}
+            current_tokens = 0
+
+        current_batch[key] = value # add to current batch if not exceeding max tokens
+        current_tokens += tokens
+    
+    if current_batch: # append the last batch
+        batches.append(current_batch)
+        
+    logger.info("Created %d batches", len(batches))
+    return batches
+
+def concat_batches(batches: list[dict]) -> dict:
+    '''Concatenate a list of dictionaries into a single dictionary.'''
+    logger = logging.getLogger(f"concat_batches ({get_session_id()})")
+    
+    output = {}
+    for batch in batches:
+        output.update(batch)
+    
+    logger.info("Concatenated %d batches", len(batches))
+    return output
+
+def split_batch(batch: dict) -> tuple[dict, dict]:
+    '''Split a batch into two dictionaries: one to keep unchanged, one to translate.'''
+    batch_keep = {}
+    batch_translate = {}
+
+    for key, value in batch.items():
+        keep_cond = not isinstance(value, str) \
+                    or (value.startswith("[") and value.endswith("]")) \
+                    or (value.startswith("{") and value.endswith("}"))
+        if keep_cond:
+            batch_keep[key] = value
+        else:
+            batch_translate[key] = value
+
+    return batch_keep, batch_translate
+
+def validate_and_update(source_dict: dict, target_dict: dict, translated_dict: dict) -> list[str]:
+    '''Validate translated dictionary and update target dictionary. Return error log.'''
+    logger = logging.getLogger(f"validate_and_update ({get_session_id()})")
+    
+    error_log = []
+    for key in source_dict.keys():
+        if translated_dict.get(key) is None: # Missing key
+            error_log.append(f"Missing translation: {key}")
+            continue
+        if isinstance(source_dict[key], list): # Invalid list length
+            if not isinstance(translated_dict[key], list) or len(source_dict[key]) != len(translated_dict[key]):
+                error_log.append(f"Invalid translation: {key}")
+                continue
+        target_dict[key] = translated_dict[key] # Update target_lang_dict only for valid keys
+    
+    logger.info("Validation completed with %d errors", len(error_log))
+    return error_log
+    
+class TranslationManager:
+    def __init__(self, translator: BaseTranslator):
+        self.translator = translator
         self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
-        self.logger.info("Initialized")
-        
-    async def __call__(self, source_dict: dict, target_dict: dict, target_lang: str, status):
+
+    async def __call__(self, source_dict: dict, target_dict: dict, target_lang: str, status: DeltaGenerator):
         source_dict_flatten = flatten(source_dict, separator="|") # Flatten json
-        batches = self.make_batches(source_dict_flatten, max_tokens=6000) # 6000 tokens max
-        batches_out = await self.translate(batches, target_lang, status)
-        translated_dict = unflatten_list(self.concat_batches(batches_out), separator="|")
-        self.validate_and_update(source_dict, target_dict, translated_dict, status)
-
-    @staticmethod
-    def _escape(text: str) -> str:
-        text = re.sub(r"(\\n)", r"<br>", text) # escape newline
-        return re.sub(r"(&[0-9a-z])", lambda x: f"<{x.group(0)[1:]}>", text) # escape color code
-    
-    @staticmethod
-    def _unescape(text: str) -> str:
-        text = re.sub(r"(<[0-9a-zA-Z]>)", lambda x: f"&{x.group(0)[1:-1].lower()}", text) # restore color code
-        text = re.sub(r"&(?=[^0-9a-z]|$)", r"\&", text) # escape single &
-        text = re.sub(r"(<br>|<BR>)", r"\\n", text) # restore newline
-        return text
-
-    @staticmethod
-    def split_batch(batch: dict) -> tuple[dict]:
-        batch_keep = {}
-        batch_translate = {}
-
-        for key, value in batch.items():
-            keep_cond = not isinstance(value, str) \
-                        or (value.startswith("[") and value.endswith("]")) \
-                        or (value.startswith("{") and value.endswith("}"))
-            if keep_cond:
-                batch_keep[key] = value
-            else:
-                batch_translate[key] = value
-
-        return batch_keep, batch_translate
-
-    def make_batches(self, lang_dict: dict, max_tokens: int) -> list:
-        batches = []
-        current_batch = {}
-        current_tokens = 0
-        enc = tiktoken.encoding_for_model("gpt-4")
+        batches = make_batches(source_dict_flatten, max_tokens=6000) # 6000 tokens max
+        batches_out = await self.translator.translate(batches, target_lang, status)
+        translated_dict = unflatten_list(concat_batches(batches_out), separator="|")
+        error_log = validate_and_update(source_dict, target_dict, translated_dict)
         
-        for key, value in lang_dict.items():
-            pair_str = json.dumps({key: value}, ensure_ascii=False)
-            tokens = len(enc.encode(pair_str)) # count tokens
-            if current_tokens + tokens > max_tokens and current_batch:
-                batches.append(current_batch) # append current batch
-                current_batch = {}
-                current_tokens = 0
+        if error_log:
+            status.write('**Error Log**')
+            status.code('\n'.join(error_log), language=None, line_numbers=True, height=300) # display error log
 
-            current_batch[key] = value # add to current batch if not exceeding max tokens
-            current_tokens += tokens
-        
-        if current_batch: # append the last batch
-            batches.append(current_batch)
+class BaseTranslator(ABC):
+    def __init__(self, auth_key: str = None):
+        self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
 
-        self.logger.info("Created %d batches", len(batches))
-
-        return batches
-    
-    async def translate(self, batches: dict, target_lang: str, status):
+    async def translate(self, batches: list[dict], target_lang: str, status: DeltaGenerator) -> list[dict]:
         semaphore = asyncio.Semaphore(4) # concurrency limit
         progress_bar = status.progress(0, "Translating...")
         
@@ -109,58 +153,34 @@ class Translator:
         return batches_out
 
     @abstractmethod
-    async def _translate(self, batch: str, target_lang: str) -> dict:
+    async def _translate(self, batch: dict, target_lang: str) -> dict:
         pass
 
-    def concat_batches(self, batches: list) -> dict:
-        output = {}
-        for batch in batches:
-            output.update(batch)
-        self.logger.info("Concatenated translated batches")
-        return output
-    
-    def validate_and_update(self, source_dict: dict, target_dict: dict, translated_dict: dict, status) -> None:
-        error_log = []
-        for key in source_dict.keys():
-            if translated_dict.get(key) is None: # Missing key
-                error_log.append(f"Missing translation: {key}")
-                continue
-            if isinstance(source_dict[key], list): # Invalid list length
-                if not isinstance(translated_dict[key], list) or len(source_dict[key]) != len(translated_dict[key]):
-                    error_log.append(f"Invalid translation: {key}")
-                    continue
-            target_dict[key] = translated_dict[key] # Update target_lang_dict only for valid keys
-        
-        if error_log:
-            status.write('**Error Log**')
-            status.code('\n'.join(error_log), language=None, line_numbers=True, height=300) # display error log
-        self.logger.info("Validated and updated target language dictionary")
-
-class GoogleTranslator(Translator):
-    def __init__(self):
+class GoogleTranslator(BaseTranslator):
+    def __init__(self, auth_key: str = None):
         self.translator = googletrans.Translator()
         super().__init__()
     
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
     async def _translate(self, batch: dict, target_lang: str) -> dict:
-        batch_keep, batch_translate = self.split_batch(batch) # split dict
-        batch_input = [self._escape(value) for value in batch_translate.values()] # values to translate
+        batch_keep, batch_translate = split_batch(batch) # split dict
+        batch_input = [escape_text(value) for value in batch_translate.values()] # values to translate
         batch_output = {}
 
         if batch_input:
             batch_output = await self.translator.translate(batch_input, dest=MINECRAFT_TO_GOOGLE[target_lang])
-            batch_output = {key: self._unescape(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
+            batch_output = {key: unescape_text(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
         return batch_keep | batch_output
 
-class DeepLTranslator(Translator):
+class DeepLTranslator(BaseTranslator):
     def __init__(self, auth_key: str):
         self.translator = deepl.DeepLClient(auth_key)
         super().__init__()
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
     async def _translate(self, batch: dict, target_lang: str) -> dict:
-        batch_keep, batch_translate = self.split_batch(batch)
-        batch_input = [self._escape(value) for value in batch_translate.values()] # values to translate
+        batch_keep, batch_translate = split_batch(batch)
+        batch_input = [escape_text(value) for value in batch_translate.values()] # values to translate
         batch_output = {}
 
         if batch_input:
@@ -171,10 +191,10 @@ class DeepLTranslator(Translator):
                 context="This is a Minecraft quest text, so please keep the color codes and formatting intact. Example of color codes: <a>, <b>, <1>, <2>, <l>, <r>. Example of formatting: <br>. Example Translation: <a>Hello <br><b>Minecraft! -> <a>안녕하세요 <br><b>마인크래프트!",
                 preserve_formatting=True
             )
-            batch_output = {key: self._unescape(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
+            batch_output = {key: unescape_text(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
         return batch_keep | batch_output
 
-class GeminiTranslator(Translator):
+class GeminiTranslator(BaseTranslator):
     def __init__(self, auth_key: str):
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.0-flash",

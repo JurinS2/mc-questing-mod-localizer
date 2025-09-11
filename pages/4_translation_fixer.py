@@ -6,7 +6,7 @@ import ftb_snbt_lib as slib
 
 from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
 from src.converter import SNBTConverter
-from src.translator import GoogleTranslator, DeepLTranslator, GeminiTranslator
+from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
 from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
 
 Message("translation_fixer_title").title()
@@ -127,6 +127,7 @@ if button:
     )
     
     try:
+        manager = TranslationManager(translator)
         task_key = f"task-{generate_task_key(time.time())}"
         schedule_task(
             task_key,
