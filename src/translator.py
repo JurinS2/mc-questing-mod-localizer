@@ -24,6 +24,13 @@ class Translator:
     def __init__(self):        
         self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
         self.logger.info("Initialized")
+        
+    async def __call__(self, source_dict: dict, target_dict: dict, target_lang: str, status):
+        source_dict_flatten = flatten(source_dict, separator="|") # Flatten json
+        batches = self.make_batches(source_dict_flatten, max_tokens=6000) # 6000 tokens max
+        batches_out = await self.translate(batches, target_lang, status)
+        translated_dict = unflatten_list(self.concat_batches(batches_out), separator="|")
+        self.validate_and_update(source_dict, target_dict, translated_dict, status)
 
     @staticmethod
     def _escape(text: str) -> str:
@@ -43,11 +50,10 @@ class Translator:
         batch_translate = {}
 
         for key, value in batch.items():
-            if not isinstance(value, str): # non-string values
-                batch_keep[key] = value
-            elif value.startswith("[") and value.endswith("]"): # []
-                batch_keep[key] = value
-            elif value.startswith("{") and value.endswith("}"): # {}
+            keep_cond = not isinstance(value, str) \
+                        or (value.startswith("[") and value.endswith("]")) \
+                        or (value.startswith("{") and value.endswith("}"))
+            if keep_cond:
                 batch_keep[key] = value
             else:
                 batch_translate[key] = value
@@ -78,7 +84,7 @@ class Translator:
 
         return batches
     
-    async def translate(self, source_dict: dict, target_dict: dict, target_lang: str, status):
+    async def translate(self, batches: dict, target_lang: str, status):
         semaphore = asyncio.Semaphore(4) # concurrency limit
         progress_bar = status.progress(0, "Translating...")
         
@@ -94,41 +100,41 @@ class Translator:
                     self.logger.error("Failed to translate batch (%d/%d)", idx, total, exc_info=True)
                     return {} # return empty dict on failure
 
-        source_dict_flatten = flatten(source_dict, separator="|") # Flatten json
-        batches = self.make_batches(source_dict_flatten, max_tokens=6000) # 6000 tokens max
-
         tasks = [wrap_translate(idx, len(batches), batch) for idx, batch in enumerate(batches, start=1)]
         batches_out = await asyncio.gather(*tasks)
-        
+
         progress_bar.empty()
         self.logger.info("Translated %d batches", len(batches_out))
-
-        # gather results
-        result = {}
-        for out in batches_out:
-            result.update(out)
-        result = unflatten_list(result, separator="|") # Unflatten json
-        self.logger.info("Gathered translated results")
-
-        error_log = []
-        for key in source_dict.keys():
-            if result.get(key) is None: # Missing key
-                error_log.append(f"Missing translation: {key}")
-                continue
-            if isinstance(source_dict[key], list): # Invalid list length
-                if not isinstance(result[key], list) or len(source_dict[key]) != len(result[key]):
-                    error_log.append(f"Invalid translation: {key}")
-                    continue
-            target_dict[key] = result[key] # Update target_lang_dict only for valid keys
-        self.logger.info("Updated target language dictionary")
         
-        if error_log:
-            status.write('**Error Log**')
-            status.code('\n'.join(error_log), language=None, line_numbers=True, height=300)
+        return batches_out
 
     @abstractmethod
     async def _translate(self, batch: str, target_lang: str) -> dict:
         pass
+
+    def concat_batches(self, batches: list) -> dict:
+        output = {}
+        for batch in batches:
+            output.update(batch)
+        self.logger.info("Concatenated translated batches")
+        return output
+    
+    def validate_and_update(self, source_dict: dict, target_dict: dict, translated_dict: dict, status) -> None:
+        error_log = []
+        for key in source_dict.keys():
+            if translated_dict.get(key) is None: # Missing key
+                error_log.append(f"Missing translation: {key}")
+                continue
+            if isinstance(source_dict[key], list): # Invalid list length
+                if not isinstance(translated_dict[key], list) or len(source_dict[key]) != len(translated_dict[key]):
+                    error_log.append(f"Invalid translation: {key}")
+                    continue
+            target_dict[key] = translated_dict[key] # Update target_lang_dict only for valid keys
+        
+        if error_log:
+            status.write('**Error Log**')
+            status.code('\n'.join(error_log), language=None, line_numbers=True, height=300) # display error log
+        self.logger.info("Validated and updated target language dictionary")
 
 class GoogleTranslator(Translator):
     def __init__(self):
