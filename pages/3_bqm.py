@@ -5,7 +5,7 @@ import json
 import streamlit as st
 
 from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
-from src.converter import BQMQuestConverter, LANGConverter
+from src.converter import ConversionManager, BQMQuestConverter, LANGConverter
 from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
 from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
 
@@ -176,9 +176,9 @@ if button:
     try:
         if st.session_state.do_convert:
             Message("status_step_1", st_container=status).send()
-            converter = BQMQuestConverter(modpack_name, quest_files)
-            converter.lang_dict.update(source_lang_dict)
-            converted_quest_arr, source_lang_dict = converter.convert()
+            converter = BQMQuestConverter()
+            conversion_manager = ConversionManager(converter)
+            converted_quest_arr, source_lang_dict = conversion_manager(modpack_name, quest_files, source_lang_dict)
             
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()

@@ -6,9 +6,9 @@ from tempfile import TemporaryDirectory
 import streamlit as st
 
 from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
-from src.converter import FTBQuestConverter
+from src.converter import ConversionManager, FTBQuestConverter
 from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
-from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
+from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks, compress_quests
 
 Message("ftbq_title").title()
 st.page_link(
@@ -171,18 +171,18 @@ if button:
     try:
         if st.session_state.do_convert:
             Message("status_step_1", st_container=status).send()
-            converter = FTBQuestConverter(modpack_name, quest_files)
-            converter.lang_dict.update(source_lang_dict)
-            converted_quest_arr, source_lang_dict = converter.convert()
-            
+            converter = FTBQuestConverter()
+            conversion_manager = ConversionManager(converter)
+            converted_quest_arr, source_lang_dict = conversion_manager(modpack_name, quest_files, source_lang_dict)
+
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()
-            manager = TranslationManager(translator)
+            translation_manager = TranslationManager(translator)
             if source_lang_dict:
                 task_key = f"task-{generate_task_key(time.time())}"
                 schedule_task(
                     task_key,
-                    manager(source_lang_dict, target_lang_dict, target_lang, status)
+                    translation_manager(source_lang_dict, target_lang_dict, target_lang, status)
                 )
                 process_tasks()
     except Exception as e:
@@ -206,7 +206,7 @@ if button:
         if st.session_state.do_convert:
             with TemporaryDirectory() as temp_dir:
                 zip_filename = "quests.zip"
-                zip_dir = converter.compress(temp_dir, zip_filename)
+                zip_dir = compress_quests(converted_quest_arr, temp_dir, zip_filename)
                 
                 quest_zip_download = st.download_button(
                     label = zip_filename,

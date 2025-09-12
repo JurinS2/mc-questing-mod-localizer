@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Dict, List, Tuple
 
 import re
 import json
@@ -37,7 +38,7 @@ def unescape_text(text: str) -> str:
     text = re.sub(r"(<br>|<BR>)", r"\\n", text) # restore newline
     return text
 
-def make_batches(lang_dict: dict, max_tokens: int) -> list[dict]:
+def make_batches(lang_dict: Dict, max_tokens: int) -> List[Dict]:
     '''Create batches of key-value pairs from a dictionary without exceeding max token limit.'''
     logger = logging.getLogger(f"make_batches ({get_session_id()})")
     
@@ -63,7 +64,7 @@ def make_batches(lang_dict: dict, max_tokens: int) -> list[dict]:
     logger.info("Created %d batches", len(batches))
     return batches
 
-def concat_batches(batches: list[dict]) -> dict:
+def concat_batches(batches: List[Dict]) -> Dict:
     '''Concatenate a list of dictionaries into a single dictionary.'''
     logger = logging.getLogger(f"concat_batches ({get_session_id()})")
     
@@ -74,7 +75,7 @@ def concat_batches(batches: list[dict]) -> dict:
     logger.info("Concatenated %d batches", len(batches))
     return output
 
-def split_batch(batch: dict) -> tuple[dict, dict]:
+def split_batch(batch: Dict) -> Tuple[Dict, Dict]:
     '''Split a batch into two dictionaries: one to keep unchanged, one to translate.'''
     batch_keep = {}
     batch_translate = {}
@@ -90,7 +91,7 @@ def split_batch(batch: dict) -> tuple[dict, dict]:
 
     return batch_keep, batch_translate
 
-def validate_and_update(source_dict: dict, target_dict: dict, translated_dict: dict) -> list[str]:
+def validate_and_update(source_dict: Dict, target_dict: Dict, translated_dict: Dict) -> List[str]:
     '''Validate translated dictionary and update target dictionary. Return error log.'''
     logger = logging.getLogger(f"validate_and_update ({get_session_id()})")
     
@@ -113,7 +114,7 @@ class TranslationManager:
         self.translator = translator
         self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
 
-    async def __call__(self, source_dict: dict, target_dict: dict, target_lang: str, status: DeltaGenerator):
+    async def __call__(self, source_dict: Dict, target_dict: Dict, target_lang: str, status: DeltaGenerator):
         source_dict_flatten = flatten(source_dict, separator="|") # Flatten json
         batches = make_batches(source_dict_flatten, max_tokens=6000) # 6000 tokens max
         batches_out = await self.translator.translate(batches, target_lang, status)
@@ -128,7 +129,7 @@ class BaseTranslator(ABC):
     def __init__(self, auth_key: str = None):
         self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
 
-    async def translate(self, batches: list[dict], target_lang: str, status: DeltaGenerator) -> list[dict]:
+    async def translate(self, batches: List[Dict], target_lang: str, status: DeltaGenerator) -> List[Dict]:
         semaphore = asyncio.Semaphore(4) # concurrency limit
         progress_bar = status.progress(0, "Translating...")
         
@@ -153,7 +154,7 @@ class BaseTranslator(ABC):
         return batches_out
 
     @abstractmethod
-    async def _translate(self, batch: dict, target_lang: str) -> dict:
+    async def _translate(self, batch: Dict, target_lang: str) -> Dict:
         pass
 
 class GoogleTranslator(BaseTranslator):
@@ -162,7 +163,7 @@ class GoogleTranslator(BaseTranslator):
         super().__init__()
     
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
-    async def _translate(self, batch: dict, target_lang: str) -> dict:
+    async def _translate(self, batch: Dict, target_lang: str) -> Dict:
         batch_keep, batch_translate = split_batch(batch) # split dict
         batch_input = [escape_text(value) for value in batch_translate.values()] # values to translate
         batch_output = {}
@@ -178,7 +179,7 @@ class DeepLTranslator(BaseTranslator):
         super().__init__()
 
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
-    async def _translate(self, batch: dict, target_lang: str) -> dict:
+    async def _translate(self, batch: Dict, target_lang: str) -> Dict:
         batch_keep, batch_translate = split_batch(batch)
         batch_input = [escape_text(value) for value in batch_translate.values()] # values to translate
         batch_output = {}
@@ -230,7 +231,7 @@ class GeminiTranslator(BaseTranslator):
         super().__init__()
     
     @staticmethod
-    def extract_json(text: str) -> dict:
+    def extract_json(text: str) -> Dict:
         '''
         Copyright 2025 moonzoo
         
@@ -259,7 +260,7 @@ class GeminiTranslator(BaseTranslator):
             raise ValueError("Input must be a string.")
 
     # Langchain automatically retries failed requests
-    async def _translate(self, batch: dict, target_lang: str) -> dict:
+    async def _translate(self, batch: Dict, target_lang: str) -> Dict:
         batch_output = await self.translator.ainvoke(
             {
                 "target_lang": target_lang,
