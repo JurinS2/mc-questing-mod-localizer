@@ -57,7 +57,7 @@ class BaseQuestConverter(ABC):
         return quest_arr, lang_dict
 
     @abstractmethod
-    def _convert(self, quest_key: str, quest_data: Dict):
+    def _convert(self, quest_key: str, quest_data: Dict, lang_dict: Dict):
         pass
 
 class FTBQuestConverter(BaseQuestConverter):
@@ -70,10 +70,10 @@ class FTBQuestConverter(BaseQuestConverter):
     def _convert(self, quest_key: str, quest_data: tag.Compound, lang_dict: Dict):
         for element in filter(lambda x: quest_data[x], quest_data):
             if isinstance(quest_data[element], tag.Compound):
-                self._convert(f"{quest_key}.{element}", quest_data[element])
+                self._convert(f"{quest_key}.{element}", quest_data[element], lang_dict)
             elif isinstance(quest_data[element],tag.List) and issubclass(quest_data[element].subtype, tag.Compound):
                 for idx in range(len(quest_data[element])):
-                    self._convert(f"{quest_key}.{element}{idx}", quest_data[element][idx])
+                    self._convert(f"{quest_key}.{element}{idx}", quest_data[element][idx], lang_dict)
 
             if element in ("title", "subtitle", "description"):
                 if isinstance(quest_data[element], tag.String) and filter_text(quest_data[element]):

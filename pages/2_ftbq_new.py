@@ -120,7 +120,8 @@ if button:
         status.error(f"An error occurred while localizing: {e}")
         st.stop()
     finally:
-        del st.session_state.tasks[task_key]
+        if source_lang_dict and task_key in st.session_state.tasks:
+            del st.session_state.tasks[task_key]
 
     status.update(
         label = Message("status_done").text,

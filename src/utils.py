@@ -26,6 +26,7 @@ def write_file(data: str) -> BytesIO:
     return BytesIO(data.encode('utf-8'))
 
 def compress_quests(quest_arr: List, dir: str, filename: str) -> str:
+    """Compresses a list of quests into a zip file and returns the zip file path."""
     zip_dir = os.path.join(dir, filename)
     with ZipFile(zip_dir, "w") as zip_file:
         for quest_name, quest_data in quest_arr:

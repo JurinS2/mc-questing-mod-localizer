@@ -193,7 +193,8 @@ if button:
         status.error(f"An error occurred while localizing: {e}")
         st.stop()
     finally:
-        del st.session_state.tasks[task_key]
+        if st.session_state.do_translate and source_lang_dict and task_key in st.session_state.tasks:
+            del st.session_state.tasks[task_key]
     
     status.update(
         label = Message("status_done").text,
@@ -219,7 +220,7 @@ if button:
             source_lang_filename = f"{source_lang}.json"
             source_lang_download = st.download_button(
                 label = source_lang_filename,
-                data = json.dumps(converter.lang_dict, indent=4, ensure_ascii=False),
+                data = json.dumps(source_lang_dict, indent=4, ensure_ascii=False),
                 file_name = source_lang_filename,
                 on_click = "ignore",
                 mime = "application/json"

@@ -182,12 +182,12 @@ if button:
             
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()
-            manager = TranslationManager(translator)
+            translation_manager = TranslationManager(translator)
             if source_lang_dict:
                 task_key = f"task-{generate_task_key(time.time())}"
                 schedule_task(
                     task_key,
-                    manager(source_lang_dict, target_lang_dict, target_lang, status)
+                    translation_manager(source_lang_dict, target_lang_dict, target_lang, status)
                 )
                 process_tasks()
     except Exception as e:
@@ -198,7 +198,8 @@ if button:
         status.error(f"An error occurred while localizing: {e}")
         st.stop()
     finally:
-        del st.session_state.tasks[task_key]
+        if st.session_state.do_translate and source_lang_dict and task_key in st.session_state.tasks:
+            del st.session_state.tasks[task_key]
 
     status.update(
         label = Message("status_done").text,
@@ -221,7 +222,7 @@ if button:
             source_lang_filename = f"{source_lang}.lang"
             source_lang_download = st.download_button(
                 label = source_lang_filename,
-                data = lang_converter.convert_json_to_lang(converter.lang_dict),
+                data = lang_converter.convert_json_to_lang(source_lang_dict),
                 file_name = source_lang_filename,
                 on_click = "ignore",
                 mime = "text/plain"
