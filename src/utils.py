@@ -1,6 +1,11 @@
+from typing import List
+
+import os
 import hashlib
 import asyncio
+import ftb_snbt_lib as slib
 from io import StringIO, BytesIO
+from zipfile import ZipFile
 
 import streamlit as st
 from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -19,6 +24,14 @@ def read_file(file: BytesIO) -> str:
 
 def write_file(data: str) -> BytesIO:
     return BytesIO(data.encode('utf-8'))
+
+def compress_quests(quest_arr: List, dir: str, filename: str) -> str:
+    """Compresses a list of quests into a zip file and returns the zip file path."""
+    zip_dir = os.path.join(dir, filename)
+    with ZipFile(zip_dir, "w") as zip_file:
+        for quest_name, quest_data in quest_arr:
+            zip_file.writestr(f"{quest_name}.snbt", slib.dumps(quest_data))
+    return zip_dir
 
 def get_session_id() -> str:
     return get_script_run_ctx().session_id

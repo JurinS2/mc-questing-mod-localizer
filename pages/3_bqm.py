@@ -5,8 +5,8 @@ import json
 import streamlit as st
 
 from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
-from src.converter import BQMQuestConverter, LANGConverter
-from src.translator import GoogleTranslator, DeepLTranslator, GeminiTranslator
+from src.converter import ConversionManager, BQMQuestConverter, LANGConverter
+from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
 from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
 
 Message("bqm_title").title()
@@ -176,17 +176,18 @@ if button:
     try:
         if st.session_state.do_convert:
             Message("status_step_1", st_container=status).send()
-            converter = BQMQuestConverter(modpack_name, quest_files)
-            converter.lang_dict.update(source_lang_dict)
-            converted_quest_arr, source_lang_dict = converter.convert()
+            converter = BQMQuestConverter()
+            conversion_manager = ConversionManager(converter)
+            converted_quest_arr, source_lang_dict = conversion_manager(modpack_name, quest_files, source_lang_dict)
             
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()
+            translation_manager = TranslationManager(translator)
             if source_lang_dict:
                 task_key = f"task-{generate_task_key(time.time())}"
                 schedule_task(
                     task_key,
-                    translator.translate(source_lang_dict, target_lang_dict, target_lang, status)
+                    translation_manager(source_lang_dict, target_lang_dict, target_lang, status)
                 )
                 process_tasks()
     except Exception as e:
@@ -197,7 +198,8 @@ if button:
         status.error(f"An error occurred while localizing: {e}")
         st.stop()
     finally:
-        del st.session_state.tasks[task_key]
+        if st.session_state.do_translate and source_lang_dict and task_key in st.session_state.tasks:
+            del st.session_state.tasks[task_key]
 
     status.update(
         label = Message("status_done").text,
@@ -220,7 +222,7 @@ if button:
             source_lang_filename = f"{source_lang}.lang"
             source_lang_download = st.download_button(
                 label = source_lang_filename,
-                data = lang_converter.convert_json_to_lang(converter.lang_dict),
+                data = lang_converter.convert_json_to_lang(source_lang_dict),
                 file_name = source_lang_filename,
                 on_click = "ignore",
                 mime = "text/plain"

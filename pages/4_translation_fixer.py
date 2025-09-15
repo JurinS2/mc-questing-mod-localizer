@@ -6,7 +6,7 @@ import ftb_snbt_lib as slib
 
 from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
 from src.converter import SNBTConverter
-from src.translator import GoogleTranslator, DeepLTranslator, GeminiTranslator
+from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
 from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
 
 Message("translation_fixer_title").title()
@@ -127,10 +127,11 @@ if button:
     )
     
     try:
+        manager = TranslationManager(translator)
         task_key = f"task-{generate_task_key(time.time())}"
         schedule_task(
             task_key,
-            translator.translate(selection, data, target_lang, status)
+            manager(selection, data, target_lang, status)
         )
         process_tasks()
     except Exception as e:
@@ -141,7 +142,8 @@ if button:
         status.error(f"An error occurred while localizing: {e}")
         st.stop()
     finally:
-        del st.session_state.tasks[task_key]
+        if task_key in st.session_state.tasks:
+            del st.session_state.tasks[task_key]
     
     status.update(
         label = Message("status_done").text,
