@@ -11,6 +11,8 @@
     "deepl_key_help": "To get your API key, visit [DeepL API](https://www.deepl.com/pro-api) and sign up for a DeepL account. (free tier available)",
     "gemini_key_label": "Gemini API Key",
     "gemini_key_help": "To get your API key, visit [Gemini API](https://ai.google.dev/gemini-api/docs) and sign up for a Gemini account. (free tier available)",
+    "openai_key_label": "OpenAI API Key",
+    "openai_key_help": "To get your API key, visit [OpenAI API](https://platform.openai.com/signup) and sign up for an OpenAI account.",
     "api_key_caption": "Your API key is not stored anywhere and is only used for translation. **Do not share your API key with others.**",
     "api_key_empty": "Please enter your API key in the sidebar to proceed.",
     "api_key_invalid": "The API key is invalid or has reached its limit.",

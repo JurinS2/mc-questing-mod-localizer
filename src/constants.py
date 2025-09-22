@@ -2,11 +2,29 @@ import os
 import json
 from googletrans.constants import LANGUAGES
 
-MESSAGES = dict()
+MESSAGES = {}
 for filename in os.listdir("lang"):
     base, ext = os.path.splitext(filename)
     if ext == ".json":
         MESSAGES[base] = json.load(open(f"lang/{filename}", "r", encoding="utf-8-sig"))
+
+LLM_PROMPT = """You are a Minecraft modpack quest translation assistant.
+            Your task is to translate the given JSON-formatted text, while keeping the original JSON structure.
+            Be aware that what you are translating is a quest text for Minecraft modpack.
+            The property names in the JSON must remain UNCHANGED and enclosed in DOUBLE QUOTES.
+            You must keep the color codes INTACT. Example of color codes: &a, &b, &1, &2, &l, &r.
+            You must keep the new line symbol (\\n) INTACT.
+            Text enclosed in [] or {{}} must be kept UNCHANGED.
+            If there are words that are difficult or ambiguous to translate, translate them PHONETICALLY. Also, translate proper nouns PHONETICALLY.
+            Translation Examples (en_us -> ko_kr):
+            - &aDiamond Pickaxe&r -> &a다이아몬드 곡괭이&r
+            - {{@pagebreak}} -> {{@pagebreak}}
+            - While the &aUpgrade Template&r is not needed to make the initial tool, it will save you a lot of &6Allthemodium Ingots&r! -> &a업그레이드 템플릿&r은 초기 도구를 만드는 데 필요하지 않지만, &6올더모듐 주괴&r를 많이 절약할 수 있습니다!
+            Your output must follow these format instructions: {format_instructions}
+            Translate the following JSON-formatted text to {target_lang}:
+            ```json
+            {query}
+            ```"""
 
 MINECRAFT_LOCALES = [
     "af_za",
@@ -371,8 +389,8 @@ MINECRAFT_TO_DEEPL = {
 }
 
 if __name__ == "__main__":
-    MINECRAFT_LANGUAGES = dict()
-    MINECRAFT_TO_GOOGLE = dict()
+    MINECRAFT_LANGUAGES = {}
+    MINECRAFT_TO_GOOGLE = {}
     for lang in MINECRAFT_LOCALES:
         _lang = lang.replace("_", "-")
         if LANGUAGES.get(_lang):

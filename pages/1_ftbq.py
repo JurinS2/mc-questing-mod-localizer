@@ -5,10 +5,10 @@ from tempfile import TemporaryDirectory
 
 import streamlit as st
 
-from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
+from src.constants import MINECRAFT_LANGUAGES
 from src.converter import ConversionManager, FTBQuestConverter
-from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
-from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks, compress_quests
+from src.translator import TranslationManager, get_translator_cls
+from src.utils import *
 
 Message("ftbq_title").title()
 st.page_link(
@@ -65,16 +65,7 @@ with st.form("task_form"):
 if task == 2 and not lang_exists:
     Message("select_task_nothing", stop=True).error()
 
-match task:
-    case 0:
-        st.session_state.do_convert = True
-        st.session_state.do_translate = True
-    case 1:
-        st.session_state.do_convert = True
-        st.session_state.do_translate = False
-    case 2:
-        st.session_state.do_convert = False
-        st.session_state.do_translate = True
+set_task(task)
 
 with st.container(border=True):    
     if st.session_state.do_convert:
@@ -99,36 +90,22 @@ if st.session_state.lang_exists and not lang_file:
     st.stop()
     
 with st.container(border=True):
-    lang_list = list(MINECRAFT_LANGUAGES)
     if st.session_state.do_translate:
         Message("settings_header").subheader()
         
         translator_service = st.pills(
             label = Message("select_translator_label").text,
-            options = ["Google", "DeepL", "Gemini"],
+            options = ["Google", "DeepL", "Gemini", "OpenAI"],
             default = "Google",
             key = "translator_service",
         )
-        
-        match translator_service:
-            case "Google":
-                lang_list = list(MINECRAFT_TO_GOOGLE)
-                translator = GoogleTranslator()
-            case "DeepL":
-                deepl_key = st.session_state.deepl_key
-                if not deepl_key:
-                    Message("api_key_empty", stop=True).info()
-                if not check_deepl_key(deepl_key):
-                    Message("api_key_invalid", stop=True).error()
-                lang_list = list(MINECRAFT_TO_DEEPL)
-                translator = DeepLTranslator(auth_key=deepl_key)
-            case "Gemini":
-                gemini_key = st.session_state.gemini_key
-                if not gemini_key:
-                    Message("api_key_empty", stop=True).info()
-                if not check_gemini_key(gemini_key):
-                    Message("api_key_invalid", stop=True).error()
-                translator = GeminiTranslator(auth_key=gemini_key)
+
+        translator_cls, auth_key = get_translator_cls(translator_service)
+        check_auth_key(translator_cls, auth_key)
+        translator = translator_cls(auth_key)
+        lang_list = translator.lang_list
+    else:
+        lang_list = list(MINECRAFT_LANGUAGES)
 
     source_lang = st.selectbox(
         label = Message("select_source_lang_label").text,
