@@ -1,13 +1,14 @@
 import time
 import json
+
 import pandas as pd
 import streamlit as st
 import ftb_snbt_lib as slib
 
-from src.constants import MINECRAFT_LANGUAGES, MINECRAFT_TO_GOOGLE, MINECRAFT_TO_DEEPL
+from src.constants import MINECRAFT_LANGUAGES
 from src.converter import SNBTConverter
-from src.translator import TranslationManager, GoogleTranslator, DeepLTranslator, GeminiTranslator
-from src.utils import Message, read_file, check_deepl_key, check_gemini_key, generate_task_key, schedule_task, process_tasks
+from src.translator import TranslationManager, get_translator_cls
+from src.utils import *
 
 Message("translation_fixer_title").title()
 st.page_link(
@@ -45,36 +46,19 @@ if not lang_file:
     st.stop()
 
 with st.container(border=True):
-    lang_list = list(MINECRAFT_LANGUAGES)
-    
     Message("settings_header").subheader()
     
     translator_service = st.pills(
         label = Message("select_translator_label").text,
-        options = ["Google", "DeepL", "Gemini"],
+        options = ["Google", "DeepL", "Gemini", "OpenAI"],
         default = "Google",
         key = "translator_service",
     )
     
-    match translator_service:
-        case "Google":
-            lang_list = list(MINECRAFT_TO_GOOGLE)
-            translator = GoogleTranslator()
-        case "DeepL":
-            deepl_key = st.session_state.deepl_key
-            if not deepl_key:
-                Message("api_key_empty", stop=True).info()
-            if not check_deepl_key(deepl_key):
-                Message("api_key_invalid", stop=True).error()
-            lang_list = list(MINECRAFT_TO_DEEPL)
-            translator = DeepLTranslator(auth_key=deepl_key)
-        case "Gemini":
-            gemini_key = st.session_state.gemini_key
-            if not gemini_key:
-                Message("api_key_empty", stop=True).info()
-            if not check_gemini_key(gemini_key):
-                Message("api_key_invalid", stop=True).error()
-            translator = GeminiTranslator(auth_key=gemini_key)
+    translator_cls, auth_key = get_translator_cls(translator_service)
+    check_auth_key(translator_cls, auth_key)
+    translator = translator_cls(auth_key)
+    lang_list = translator.lang_list
     
     target_lang = st.selectbox(
         label = Message("select_target_lang_label").text,

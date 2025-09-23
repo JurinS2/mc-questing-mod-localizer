@@ -1,17 +1,15 @@
+from __future__ import annotations
 from typing import List
 
 import os
 import hashlib
 import asyncio
-import ftb_snbt_lib as slib
 from io import StringIO, BytesIO
 from zipfile import ZipFile
 
 import streamlit as st
+import ftb_snbt_lib as slib
 from streamlit.runtime.scriptrunner import get_script_run_ctx
-
-import deepl
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 from src.constants import MESSAGES
 
@@ -36,27 +34,25 @@ def compress_quests(quest_arr: List, dir: str, filename: str) -> str:
 def get_session_id() -> str:
     return get_script_run_ctx().session_id
 
-@st.cache_data(ttl=60)
-def check_deepl_key(auth_key: str) -> bool:
-    try:
-        deepl_client = deepl.DeepLClient(auth_key)
-        usage = deepl_client.get_usage()
-        return usage.character.count < usage.character.limit
-    except:
-        return False
+def set_task(task: int) -> None:
+    """Sets the task flags in session state based on the selected task."""
+    match task:
+        case 0:
+            st.session_state.do_convert = True
+            st.session_state.do_translate = True
+        case 1:
+            st.session_state.do_convert = True
+            st.session_state.do_translate = False
+        case 2:
+            st.session_state.do_convert = False
+            st.session_state.do_translate = True
 
-@st.cache_data(ttl=360)
-def check_gemini_key(auth_key: str) -> bool:
-    try:
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
-            google_api_key=auth_key,
-            temperature=0
-        )
-        llm.invoke("ping")
-        return True
-    except:
-        return False
+def check_auth_key(translator_cls, auth_key: str) -> None:
+    """Checks the validity of the provided API key for the translator service."""
+    if translator_cls.check_auth_key(auth_key) == -1:
+        Message("api_key_empty", stop=True).info()
+    elif translator_cls.check_auth_key(auth_key) == 0:
+        Message("api_key_invalid", stop=True).error()
 
 def schedule_task(key, coro):
     """Schedules an async task and stores it with a unique key."""
@@ -74,6 +70,7 @@ def generate_task_key(*args):
     return hashlib.sha256("-".join(map(str, args)).encode()).hexdigest()
 
 class Message:
+    """A utility class for displaying localized messages in Streamlit with optional stopping behavior."""
     message: str
     stop: bool
     
@@ -86,42 +83,38 @@ class Message:
     def text(self) -> str:
         return self.message
     
-    def send(self) -> None:
-        self.st_container.write(self.message)
+    def _stop(self) -> None:
         if self.stop:
             self.st_container.stop()
+    
+    def send(self) -> None:
+        self.st_container.write(self.message)
+        self._stop()
 
     def info(self) -> None:
         self.st_container.info(self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()
 
     def warning(self) -> None:
         self.st_container.warning(self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()
 
     def error(self) -> None:
         self.st_container.error(self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()
 
     def caption(self) -> None:
         self.st_container.caption(self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()
 
     def toast(self) -> None:
         self.st_container.toast(body=self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()
 
     def subheader(self) -> None:
         self.st_container.subheader(self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()
 
     def title(self) -> None:
         self.st_container.title(self.message)
-        if self.stop:
-            self.st_container.stop()
+        self._stop()

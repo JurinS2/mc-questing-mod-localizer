@@ -5,11 +5,12 @@ import re
 import os
 import json
 import logging
-import ftb_snbt_lib as slib
-
 from abc import ABC, abstractmethod
 from io import BytesIO
+
+import ftb_snbt_lib as slib
 from ftb_snbt_lib import tag
+
 from src.utils import read_file, get_session_id
 
 def escape_text(text: str) -> str:

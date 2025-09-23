@@ -3,7 +3,7 @@ import logging
 import streamlit as st
 from streamlit_extras.buy_me_a_coffee import button
 
-from src.utils import get_session_id, Message
+from src.utils import Message
 
 logging.basicConfig(
     level=logging.INFO,
@@ -11,10 +11,6 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)  # Suppress httpx logs
-
-logger = logging.getLogger(f"{__name__} ({get_session_id()})")
-
-logger.info("Connection established")
 
 home_page = st.Page("pages/0_home.py", title="Home", icon="🏠")
 ftbq_page = st.Page("pages/1_ftbq.py", title="FTB Quests Localizer", icon="👑")
@@ -86,6 +82,12 @@ with st.sidebar:
         type = "password",
         key = "gemini_key",
         help = Message("gemini_key_help").text
+    )
+    st.text_input(
+        label = Message("openai_key_label").text,
+        type = "password",
+        key = "openai_key",
+        help = Message("openai_key_help").text
     )
     Message("api_key_caption").caption()
 

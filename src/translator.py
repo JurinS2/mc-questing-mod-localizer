@@ -7,6 +7,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 
+import streamlit as st
 from streamlit.delta_generator import DeltaGenerator
 from flatten_json import flatten, unflatten_list
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -15,15 +16,17 @@ from json_repair import repair_json
 import googletrans
 import deepl
 import tiktoken
+import langchain
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import AIMessage
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 from src.utils import get_session_id
-from src.constants import MINECRAFT_TO_DEEPL, MINECRAFT_TO_GOOGLE
+from src.constants import LLM_PROMPT, MINECRAFT_LANGUAGES, MINECRAFT_TO_DEEPL, MINECRAFT_TO_GOOGLE
 
 def escape_text(text: str) -> str:
     '''Escape special characters to prevent translation API from altering them.'''
@@ -108,8 +111,59 @@ def validate_and_update(source_dict: Dict, target_dict: Dict, translated_dict: D
     
     logger.info("Validation completed with %d errors", len(error_log))
     return error_log
+
+def extract_json(text: str) -> Dict:
+    '''
+    Extract JSON string from text and repair it if necessary.
     
+    Copyright 2025 moonzoo
+    
+    https://mz-moonzoo.tistory.com/m/89
+    '''
+    if isinstance(text, str):
+        # find json code block
+        if text.strip().startswith("```json"):
+            start_block = text.find("{")
+            end_block = text.rfind("}")
+            if start_block != -1 and end_block != -1 and start_block < end_block:
+                json_str = text[start_block:end_block+1]
+                return repair_json(json_str)
+
+        # find the last potential json string
+        start = text.rfind('{')
+        end = text.rfind('}')
+        if start != -1 and end != -1 and start < end:
+            json_str = text[start:end+1]
+            return repair_json(json_str)
+        elif text.strip() == '{}':
+            return "{}"
+        else:
+            raise ValueError("Invalid JSON format.")
+    else:
+        raise ValueError("Input must be a string.")
+
+def get_translator_cls(service: str) -> Tuple[BaseTranslator, str]:
+    """Get the translator class and authentication key based on the selected service."""
+    match service:
+        case "Google":
+            auth_key = None
+            translator = GoogleTranslator
+        case "DeepL":
+            auth_key = st.session_state.deepl_key
+            translator = DeepLTranslator
+        case "Gemini":
+            auth_key = st.session_state.gemini_key
+            translator = GeminiTranslator
+        case "OpenAI":
+            auth_key = st.session_state.openai_key
+            translator = OpenAITranslator
+
+    return translator, auth_key
+
+
 class TranslationManager:
+    """Manages the translation process using a specified translator."""
+    
     def __init__(self, translator: BaseTranslator):
         self.translator = translator
         self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
@@ -126,8 +180,23 @@ class TranslationManager:
             status.code('\n'.join(error_log), language=None, line_numbers=True, height=300) # display error log
 
 class BaseTranslator(ABC):
+    """Abstract base class for translators."""
+    
+    logger: logging.Logger
+    lang_list: List[str] = list(MINECRAFT_LANGUAGES)
+    
     def __init__(self, auth_key: str = None):
+        self.init_translator(auth_key)
         self.logger = logging.getLogger(f"{self.__class__.__qualname__} ({get_session_id()})")
+
+    @abstractmethod
+    def init_translator(self, auth_key: str = None):
+        pass
+    
+    @staticmethod
+    @abstractmethod
+    def check_auth_key(auth_key: str = None) -> int:
+        pass
 
     async def translate(self, batches: List[Dict], target_lang: str, status: DeltaGenerator) -> List[Dict]:
         semaphore = asyncio.Semaphore(4) # concurrency limit
@@ -157,10 +226,21 @@ class BaseTranslator(ABC):
     async def _translate(self, batch: Dict, target_lang: str) -> Dict:
         pass
 
-class GoogleTranslator(BaseTranslator):
-    def __init__(self, auth_key: str = None):
-        self.translator = googletrans.Translator()
-        super().__init__()
+class MachineTranslator(BaseTranslator, ABC):
+    """Base class for machine translators like Google and DeepL."""
+    
+    logger: logging.Logger
+    lang_list: List[str] = list(MINECRAFT_LANGUAGES)
+    languages: Dict = {}
+    
+    @abstractmethod
+    def init_translator(self, auth_key: str = None):
+        pass
+    
+    @staticmethod
+    @abstractmethod
+    def check_auth_key(auth_key: str = None) -> int:
+        pass
     
     @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
     async def _translate(self, batch: Dict, target_lang: str) -> Dict:
@@ -169,96 +249,84 @@ class GoogleTranslator(BaseTranslator):
         batch_output = {}
 
         if batch_input:
-            batch_output = await self.translator.translate(batch_input, dest=MINECRAFT_TO_GOOGLE[target_lang])
+            batch_output = await self._translate_text(batch_input, target_lang=self.languages[target_lang])
             batch_output = {key: unescape_text(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
         return batch_keep | batch_output
+    
+    @abstractmethod
+    async def _translate_text(self, text: List[str], target_lang: str) -> List:
+        pass
 
-class DeepLTranslator(BaseTranslator):
-    def __init__(self, auth_key: str):
+class GoogleTranslator(MachineTranslator):
+    logger: logging.Logger
+    translator: googletrans.Translator
+    lang_list: List[str] = list(MINECRAFT_TO_GOOGLE)
+    languages: Dict = MINECRAFT_TO_GOOGLE
+    
+    def init_translator(self, auth_key: str = None):
+        self.translator = googletrans.Translator()
+
+    @staticmethod
+    def check_auth_key(auth_key: str = None) -> int:
+        return 1
+
+    async def _translate_text(self, text: List[str], target_lang: str) -> List:
+        return await self.translator.translate(text, dest=target_lang)
+
+class DeepLTranslator(MachineTranslator):
+    logger: logging.Logger
+    translator: deepl.DeepLClient
+    lang_list: List[str] = list(MINECRAFT_TO_DEEPL)
+    languages: Dict = MINECRAFT_TO_DEEPL
+
+    def init_translator(self, auth_key: str) -> int:
         self.translator = deepl.DeepLClient(auth_key)
-        super().__init__()
+    
+    @st.cache_data(ttl=60)
+    @staticmethod
+    def check_auth_key(auth_key: str) -> int:
+        if not auth_key:
+            return -1
+        try:
+            deepl_client = deepl.DeepLClient(auth_key)
+            usage = deepl_client.get_usage()
+            return 1 if usage.character.count < usage.character.limit else 0
+        except:
+            return 0
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(min=4, max=64), reraise=True)
-    async def _translate(self, batch: Dict, target_lang: str) -> Dict:
-        batch_keep, batch_translate = split_batch(batch)
-        batch_input = [escape_text(value) for value in batch_translate.values()] # values to translate
-        batch_output = {}
-
-        if batch_input:
-            batch_output = await asyncio.to_thread(
-                self.translator.translate_text,
-                text=batch_input,
-                target_lang=MINECRAFT_TO_DEEPL[target_lang],
-                context="This is a Minecraft quest text, so please keep the color codes and formatting intact. Example of color codes: <a>, <b>, <1>, <2>, <l>, <r>. Example of formatting: <br>. Example Translation: <a>Hello <br><b>Minecraft! -> <a>안녕하세요 <br><b>마인크래프트!",
-                preserve_formatting=True
-            )
-            batch_output = {key: unescape_text(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
-        return batch_keep | batch_output
-
-class GeminiTranslator(BaseTranslator):
-    def __init__(self, auth_key: str):
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash",
-            google_api_key=auth_key,
-            temperature=0
+    async def _translate_text(self, text: List[str], target_lang: str) -> List:
+        return await asyncio.to_thread(
+            self.translator.translate_text,
+            text=text,
+            target_lang=target_lang,
+            context="This is a Minecraft quest text, so please keep the color codes and formatting intact. Example of color codes: <a>, <b>, <1>, <2>, <l>, <r>. Example of formatting: <br>. Example Translation: <a>Hello <br><b>Minecraft! -> <a>안녕하세요 <br><b>마인크래프트!",
+            preserve_formatting=True
         )
-        content_extractor = RunnableLambda(lambda msg: getattr(msg, 'content', '') if isinstance(msg, AIMessage) else str(msg)) # extract content
-        json_extractor = RunnableLambda(self.extract_json) # extract json string
-        json_parser = JsonOutputParser() # parse json
-        prompt = PromptTemplate(
-            template="""You are a Minecraft modpack quest translation assistant.
-            Your task is to translate the given JSON-formatted text, while keeping the original JSON structure.
-            Be aware that what you are translating is a quest text for Minecraft modpack.
-            The property names in the JSON must remain UNCHANGED and enclosed in DOUBLE QUOTES.
-            You must keep the color codes INTACT. Example of color codes: &a, &b, &1, &2, &l, &r.
-            You must keep the new line symbol (\\n) INTACT.
-            Text enclosed in [] or {{}} must be kept UNCHANGED.
-            If there are words that are difficult or ambiguous to translate, translate them PHONETICALLY. Also, translate proper nouns PHONETICALLY.
-            Translation Examples (en_us -> ko_kr):
-            - &aDiamond Pickaxe&r -> &a다이아몬드 곡괭이&r
-            - {{@pagebreak}} -> {{@pagebreak}}
-            - While the &aUpgrade Template&r is not needed to make the initial tool, it will save you a lot of &6Allthemodium Ingots&r! -> &a업그레이드 템플릿&r은 초기 도구를 만드는 데 필요하지 않지만, &6올더모듐 주괴&r를 많이 절약할 수 있습니다!
-            Your output must follow these format instructions: {format_instructions}
-            Translate the following JSON-formatted text to {target_lang}:
-            ```json
-            {query}
-            ```""",
-            input_variables=["target_lang", "query"],
-            partial_variables={"format_instructions": json_parser.get_format_instructions()}
-        )
-        self.translator = prompt | llm | content_extractor | json_extractor | json_parser
-        self.handler = LLMCallbackHandler(self.__class__.__qualname__)
-        super().__init__()
+
+class LLMTranslator(BaseTranslator, ABC):
+    """Base class for LLM-based translators like Gemini and OpenAI."""
+    
+    logger: logging.Logger
+    translator: langchain.chains.llm.LLMChain
+    lang_list: List[str] = list(MINECRAFT_LANGUAGES)
+    content_extractor = RunnableLambda(lambda msg: getattr(msg, 'content', '') if isinstance(msg, AIMessage) else str(msg)) # extract content
+    json_extractor = RunnableLambda(extract_json) # extract json string
+    json_parser = JsonOutputParser() # parse json
+    prompt = PromptTemplate(
+        template=LLM_PROMPT,
+        input_variables=["target_lang", "query"],
+        partial_variables={"format_instructions": json_parser.get_format_instructions()}
+    )
+    
+    @abstractmethod
+    def init_translator(self, auth_key: str = None):
+        pass
     
     @staticmethod
-    def extract_json(text: str) -> Dict:
-        '''
-        Copyright 2025 moonzoo
-        
-        https://mz-moonzoo.tistory.com/m/89
-        '''
-        if isinstance(text, str):
-            # find json code block
-            if text.strip().startswith("```json"):
-                start_block = text.find("{")
-                end_block = text.rfind("}")
-                if start_block != -1 and end_block != -1 and start_block < end_block:
-                    json_str = text[start_block:end_block+1]
-                    return repair_json(json_str)
-
-            # find the last potential json string
-            start = text.rfind('{')
-            end = text.rfind('}')
-            if start != -1 and end != -1 and start < end:
-                json_str = text[start:end+1]
-                return repair_json(json_str)
-            elif text.strip() == '{}':
-                return "{}"
-            else:
-                raise ValueError("Invalid JSON format.")
-        else:
-            raise ValueError("Input must be a string.")
-
+    @abstractmethod
+    def check_auth_key(auth_key: str) -> int:
+        pass
+    
     # Langchain automatically retries failed requests
     async def _translate(self, batch: Dict, target_lang: str) -> Dict:
         batch_output = await self.translator.ainvoke(
@@ -272,6 +340,58 @@ class GeminiTranslator(BaseTranslator):
             }
         )
         return batch_output
+
+class GeminiTranslator(LLMTranslator):
+    def init_translator(self, auth_key: str):
+        self.llm = ChatGoogleGenerativeAI(
+            model="gemini-2.0-flash",
+            google_api_key=auth_key,
+            temperature=0
+        )
+        self.translator = self.prompt | self.llm | self.content_extractor | self.json_extractor | self.json_parser
+        self.handler = LLMCallbackHandler(self.__class__.__qualname__)
+    
+    @st.cache_data(ttl=360)
+    @staticmethod
+    def check_auth_key(auth_key: str) -> int:
+        if not auth_key:
+            return -1
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model="gemini-2.0-flash",
+                google_api_key=auth_key,
+                temperature=0
+            )
+            llm.invoke("ping")
+            return 1
+        except:
+            return 0
+
+class OpenAITranslator(LLMTranslator):
+    def init_translator(self, auth_key: str):
+        self.llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            api_key=auth_key,
+            temperature=0
+        )
+        self.translator = self.prompt | self.llm | self.content_extractor | self.json_extractor | self.json_parser
+        self.handler = LLMCallbackHandler(self.__class__.__qualname__)
+
+    @st.cache_data(ttl=360)
+    @staticmethod
+    def check_auth_key(auth_key: str) -> int:
+        if not auth_key:
+            return -1
+        try:
+            llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                api_key=auth_key,
+                temperature=0
+            )
+            llm.invoke("ping")
+            return 1
+        except:
+            return 0
 
 class LLMCallbackHandler(BaseCallbackHandler):
     def __init__(self, cls_name, *args, **kwargs):
