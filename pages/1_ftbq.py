@@ -143,7 +143,6 @@ if button:
     )
 
     source_lang_dict = json.loads(read_file(lang_file)) if st.session_state.lang_exists else {}
-    target_lang_dict = copy.deepcopy(source_lang_dict)
     
     try:
         if st.session_state.do_convert:
@@ -155,6 +154,7 @@ if button:
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()
             translation_manager = TranslationManager(translator)
+            target_lang_dict = copy.deepcopy(source_lang_dict)
             if source_lang_dict:
                 task_key = f"task-{generate_task_key(time.time())}"
                 schedule_task(

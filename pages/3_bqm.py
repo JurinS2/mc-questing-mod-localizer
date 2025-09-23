@@ -96,7 +96,7 @@ with st.container(border=True):
         
         translator_service = st.pills(
             label = Message("select_translator_label").text,
-            options = ["Google", "DeepL", "Gemini"],
+            options = ["Google", "DeepL", "Gemini", "OpenAI"],
             default = "Google",
             key = "translator_service",
         )
@@ -126,9 +126,6 @@ with st.container(border=True):
         if source_lang == target_lang:
             Message("select_same_lang", stop=True).warning()
 
-with st.spinner("Loading...", show_time=True):
-    time.sleep(3)
-
 button = st.button(
     label = Message("start_button_label").text,
     type = "primary",
@@ -148,7 +145,6 @@ if button:
 
     lang_converter = LANGConverter()
     source_lang_dict = lang_converter.convert_lang_to_json(read_file(lang_file)) if st.session_state.lang_exists else {}
-    target_lang_dict = copy.deepcopy(source_lang_dict)
     
     try:
         if st.session_state.do_convert:
@@ -160,6 +156,7 @@ if button:
         if st.session_state.do_translate:
             Message("status_step_2", st_container=status).send()
             translation_manager = TranslationManager(translator)
+            target_lang_dict = copy.deepcopy(source_lang_dict)
             if source_lang_dict:
                 task_key = f"task-{generate_task_key(time.time())}"
                 schedule_task(

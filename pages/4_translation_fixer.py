@@ -50,7 +50,7 @@ with st.container(border=True):
     
     translator_service = st.pills(
         label = Message("select_translator_label").text,
-        options = ["Google", "DeepL", "Gemini"],
+        options = ["Google", "DeepL", "Gemini", "OpenAI"],
         default = "Google",
         key = "translator_service",
     )

@@ -16,6 +16,7 @@ from json_repair import repair_json
 import googletrans
 import deepl
 import tiktoken
+import langchain
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableLambda
@@ -181,6 +182,7 @@ class TranslationManager:
 class BaseTranslator(ABC):
     """Abstract base class for translators."""
     
+    logger: logging.Logger
     lang_list: List[str] = list(MINECRAFT_LANGUAGES)
     
     def __init__(self, auth_key: str = None):
@@ -227,6 +229,7 @@ class BaseTranslator(ABC):
 class MachineTranslator(BaseTranslator, ABC):
     """Base class for machine translators like Google and DeepL."""
     
+    logger: logging.Logger
     lang_list: List[str] = list(MINECRAFT_LANGUAGES)
     languages: Dict = {}
     
@@ -246,7 +249,7 @@ class MachineTranslator(BaseTranslator, ABC):
         batch_output = {}
 
         if batch_input:
-            batch_output = await self._translate_text(batch_input, dest=self.languages[target_lang])
+            batch_output = await self._translate_text(batch_input, target_lang=self.languages[target_lang])
             batch_output = {key: unescape_text(value.text) for key, value in zip(batch_translate.keys(), batch_output)}
         return batch_keep | batch_output
     
@@ -255,6 +258,8 @@ class MachineTranslator(BaseTranslator, ABC):
         pass
 
 class GoogleTranslator(MachineTranslator):
+    logger: logging.Logger
+    translator: googletrans.Translator
     lang_list: List[str] = list(MINECRAFT_TO_GOOGLE)
     languages: Dict = MINECRAFT_TO_GOOGLE
     
@@ -269,6 +274,8 @@ class GoogleTranslator(MachineTranslator):
         return await self.translator.translate(text, dest=target_lang)
 
 class DeepLTranslator(MachineTranslator):
+    logger: logging.Logger
+    translator: deepl.DeepLClient
     lang_list: List[str] = list(MINECRAFT_TO_DEEPL)
     languages: Dict = MINECRAFT_TO_DEEPL
 
@@ -298,6 +305,9 @@ class DeepLTranslator(MachineTranslator):
 
 class LLMTranslator(BaseTranslator, ABC):
     """Base class for LLM-based translators like Gemini and OpenAI."""
+    
+    logger: logging.Logger
+    translator: langchain.chains.llm.LLMChain
     lang_list: List[str] = list(MINECRAFT_LANGUAGES)
     content_extractor = RunnableLambda(lambda msg: getattr(msg, 'content', '') if isinstance(msg, AIMessage) else str(msg)) # extract content
     json_extractor = RunnableLambda(extract_json) # extract json string
