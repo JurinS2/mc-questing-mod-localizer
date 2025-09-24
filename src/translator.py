@@ -157,6 +157,8 @@ def get_translator_cls(service: str) -> Tuple[BaseTranslator, str]:
         case "OpenAI":
             auth_key = st.session_state.openai_key
             translator = OpenAITranslator
+        case _:
+            raise ValueError("Unknown translator service.")
 
     return translator, auth_key
 
