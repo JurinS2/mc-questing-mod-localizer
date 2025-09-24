@@ -202,7 +202,7 @@ class BaseTranslator(ABC):
         pass
 
     async def translate(self, batches: List[Dict], target_lang: str, status: DeltaGenerator) -> List[Dict]:
-        semaphore = asyncio.Semaphore(1) # concurrency limit
+        semaphore = asyncio.Semaphore(4) # concurrency limit
         progress_bar = status.progress(0, "Translating...")
         
         start_time = time.time()
