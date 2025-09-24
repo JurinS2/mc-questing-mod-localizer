@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 
 import re
+import time
 import json
 import asyncio
 import logging
@@ -201,17 +202,28 @@ class BaseTranslator(ABC):
         pass
 
     async def translate(self, batches: List[Dict], target_lang: str, status: DeltaGenerator) -> List[Dict]:
-        semaphore = asyncio.Semaphore(4) # concurrency limit
+        semaphore = asyncio.Semaphore(1) # concurrency limit
         progress_bar = status.progress(0, "Translating...")
         
+        start_time = time.time()
+        elapsed_time = 0.0
+        remaining_time = 0.0
+        
         async def wrap_translate(idx, total, batch):
+            nonlocal elapsed_time, remaining_time
+            
             async with semaphore:
                 await asyncio.sleep(5) # 5 sec delay
 
                 try:
-                    progress_bar.progress(idx / total, f"Translating... ({idx}/{total})")
+                    progress_bar.progress(idx / total, f"Translating... ({idx}/{total}) [{remaining_time//60:.0f}m {remaining_time%60:.0f}s left]")
                     self.logger.info("Translating batch (%d/%d)", idx, total)
-                    return await self._translate(batch, target_lang)
+                    batch_out = await self._translate(batch, target_lang)
+                    
+                    elapsed_time = time.time() - start_time
+                    remaining_time = (elapsed_time / idx) * (total - idx) if idx < total else 0.0
+                    
+                    return batch_out
                 except Exception:
                     self.logger.error("Failed to translate batch (%d/%d)", idx, total, exc_info=True)
                     return {} # return empty dict on failure
